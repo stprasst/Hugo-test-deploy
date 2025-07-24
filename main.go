@@ -3,7 +3,6 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
