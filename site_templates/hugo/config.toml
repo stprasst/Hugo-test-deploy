@@ -1,0 +1,4 @@
+baseURL = "http://44.204.45.154"
+languageCode = "en-us"
+title = "My Site"
+theme = "ananke"

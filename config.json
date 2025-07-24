@@ -1,0 +1,11 @@
+{
+  "allowed_origins": "*",
+  "auth_token": "",
+  "base_url": "",
+  "deployment_path": "/home/ubuntu",
+  "export_type": "hugo",
+  "log_path": "./logs",
+  "port": "8080",
+  "theme": "ananke",
+  "title": "My Site"
+}
