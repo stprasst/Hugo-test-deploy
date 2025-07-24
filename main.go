@@ -2,6 +2,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -12,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"archive/zip"
 	"io/ioutil"
 )
 
@@ -185,17 +186,49 @@ func handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if this is a site initialization request
+	// Check if this is a site initialization request with a ZIP file
 	isInit := r.FormValue("init") == "true"
 	if isInit {
-		// Copy site template to deployment path
-		templatePath := filepath.Join("site_templates", exportType)
-		if err := copyDirectory(templatePath, deployPath); err != nil {
-			logger.Printf("Error initializing site template: %v", err)
-			sendResponse(w, false, fmt.Sprintf("Error initializing site template: %v", err), http.StatusInternalServerError)
+		// Look for a template ZIP file
+		file, header, err := r.FormFile("template_zip")
+		if err != nil {
+			logger.Printf("No template ZIP file provided: %v", err)
+		} else {
+			defer file.Close()
+			
+			logger.Printf("Received template ZIP file: %s (%d bytes)", header.Filename, header.Size)
+			
+			// Create a temporary file to store the ZIP
+			tempFile, err := ioutil.TempFile("", "template-*.zip")
+			if err != nil {
+				logger.Printf("Error creating temporary file: %v", err)
+				sendResponse(w, false, fmt.Sprintf("Error creating temporary file: %v", err), http.StatusInternalServerError)
+				return
+			}
+			defer os.Remove(tempFile.Name())
+			defer tempFile.Close()
+			
+			// Copy the ZIP file to the temporary file
+			if _, err := io.Copy(tempFile, file); err != nil {
+				logger.Printf("Error copying ZIP file: %v", err)
+				sendResponse(w, false, fmt.Sprintf("Error copying ZIP file: %v", err), http.StatusInternalServerError)
+				return
+			}
+			
+			// Close the file to ensure all data is written
+			tempFile.Close()
+			
+			// Extract the ZIP file to the deployment path
+			if err := extractZip(tempFile.Name(), deployPath); err != nil {
+				logger.Printf("Error extracting ZIP file: %v", err)
+				sendResponse(w, false, fmt.Sprintf("Error extracting ZIP file: %v", err), http.StatusInternalServerError)
+				return
+			}
+			
+			logger.Printf("Extracted template ZIP file to %s", deployPath)
+			sendResponse(w, true, fmt.Sprintf("Successfully initialized %s site template at %s", exportType, deployPath), http.StatusOK)
 			return
 		}
-		logger.Printf("Initialized %s site template at %s", exportType, deployPath)
 	}
 	
 	// Process all files
@@ -347,4 +380,69 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.Chmod(dst, srcInfo.Mode())
+}
+
+// extractZip extracts a ZIP file to the specified destination directory.
+func extractZip(zipFile, destDir string) error {
+	// Open the ZIP file
+	reader, err := zip.OpenReader(zipFile)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	
+	// Create destination directory if it doesn't exist
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
+	}
+	
+	// Extract each file
+	for _, file := range reader.File {
+		// Construct the full path for the extracted file
+		path := filepath.Join(destDir, file.Name)
+		
+		// Check for directory traversal attacks
+		if !strings.HasPrefix(path, filepath.Clean(destDir)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path: %s", file.Name)
+		}
+		
+		// If it's a directory, create it
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(path, file.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+		
+		// Create the directory for the file if it doesn't exist
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		
+		// Open the file from the ZIP
+		fileReader, err := file.Open()
+		if err != nil {
+			return err
+		}
+		
+		// Create the file
+		fileWriter, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			fileReader.Close()
+			return err
+		}
+		
+		// Copy the contents
+		if _, err := io.Copy(fileWriter, fileReader); err != nil {
+			fileReader.Close()
+			fileWriter.Close()
+			return err
+		}
+		
+		// Close both files
+		fileReader.Close()
+		fileWriter.Close()
+	}
+	
+	return nil
 }
